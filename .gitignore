@@ -1,13 +1,11 @@
 # This .gitignore file should be placed at the root of your Unity project directory
 #
-# Get latest from https://github.com/github/gitignore/blob/main/Unity.gitignore
-#
+# Based on: https://github.com/github/gitignore/blob/main/Unity.gitignore
+
 .utmp/
 /[Ll]ibrary/
 /[Tt]emp/
 /[Oo]bj/
-/[Bb]uild/
-/[Bb]uilds/
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
 *.log
@@ -57,12 +55,19 @@ ExportedObj/
 # Unity3D generated file on crash reports
 sysinfo.txt
 
-# Builds
+# Builds (ignore everywhere EXCEPT Builds folder)
 *.apk
 *.aab
 *.unitypackage
 *.unitypackage.meta
 *.app
+
+# Allow builds inside Builds folder
+!Builds/
+!Builds/**
+!Builds/**/*.apk
+!Builds/**/*.aab
+!Builds/**/*.app
 
 # Crashlytics generated file
 crashlytics-build.properties
