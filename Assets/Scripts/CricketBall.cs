@@ -14,12 +14,19 @@ namespace ParodyStudios.Cricket
     /// Phase I (Swing):
     ///   - In air: ball curves smoothly sideways while travelling forward.
     ///   - At bounce: lateral force stops INSTANTLY.
-    ///   - After bounce: ball continues along the tangent direction it had at impact.
+    ///   - After bounce: ball rebounds upward (with restitution) and continues along
+    ///     the tangent direction it had at impact, arcing under gravity.
     ///
     /// Phase II (Spin):
     ///   - In air: ball travels in a straight line (no lateral deviation).
-    ///   - At bounce: a single, instant sideways kick is applied (the "kink").
-    ///   - After bounce: ball continues straight along the new direction.
+    ///   - At bounce: a single, instant sideways kick is applied (the "kink"), and
+    ///     the ball rebounds upward with restitution.
+    ///   - After bounce: ball continues straight (in top-down view) along the new
+    ///     direction, arcing under gravity.
+    ///
+    /// "Straight after bounce" refers to the top-down trajectory: no curving sideways.
+    /// Vertical motion is governed by realistic restitution + gravity so the ball
+    /// bounces up to a believable height before coming back down.
     ///
     /// The whole flight is computed kinematically (transform-driven) so the path is
     /// deterministic, jitter-free, and matches the spec's "no glitches" requirement.
@@ -52,7 +59,8 @@ namespace ParodyStudios.Cricket
 
         [Tooltip("Shape of the swing offset over flight progress (0 = release, 1 = bounce). " +
                  "Should start gentle and accelerate so the curve feels natural.")]
-        [SerializeField] private AnimationCurve swingProgressCurve =
+        [SerializeField]
+        private AnimationCurve swingProgressCurve =
             new AnimationCurve(new Keyframe(0f, 0f, 0f, 0f), new Keyframe(1f, 1f, 2f, 2f));
 
         // -----------------------------------------------------------------
@@ -72,14 +80,32 @@ namespace ParodyStudios.Cricket
         // Post-bounce
         // -----------------------------------------------------------------
         [Header("Post-Bounce")]
-        [Tooltip("Velocity damping per second applied after bounce (simulates ground drag).")]
-        [SerializeField] private float postBounceDamping = 0.4f;
+        [Tooltip("Restitution at the bounce — how much vertical speed is kept and inverted on impact. " +
+                 "Real cricket pitches are typically 0.45–0.60. Higher = bouncier.")]
+        [SerializeField, Range(0f, 1f)] private float bounceRestitution = 0.55f;
+
+        [Tooltip("Gravity applied to the ball every frame, m/s². Should be negative (downward).")]
+        [SerializeField] private float gravity = -9.81f;
+
+        [Tooltip("Horizontal velocity damping per second after bounce (air drag + ground friction proxy). " +
+                 "Vertical motion is governed by gravity, NOT this value.")]
+        [SerializeField] private float postBounceDamping = 0.15f;
+
+        [Tooltip("If a secondary bounce produces less vertical speed than this, the ball stops bouncing " +
+                 "and rolls/slides flat (prevents endless tiny micro-bounces).")]
+        [SerializeField] private float minBounceVelocity = 0.6f;
 
         [Tooltip("Time (seconds) the ball travels after bouncing before being considered done.")]
         [SerializeField] private float postBounceLifetime = 4f;
 
-        [Tooltip("Optional trail renderer to visualize the path. Cleared on each new delivery.")]
-        [SerializeField] private TrailRenderer trail;
+        [Tooltip("Trail used while the ball is IN THE AIR (curved swing path or straight spin path). " +
+                 "Cleared on each new delivery, then stops emitting at bounce — existing segments fade out " +
+                 "naturally while the ground trail takes over.")]
+        [SerializeField] private TrailRenderer airTrail;
+
+        [Tooltip("Trail used AFTER the bounce. Give it a different color/width from the air trail so the " +
+                 "transition between the curved air phase and the straight post-bounce phase is obvious.")]
+        [SerializeField] private TrailRenderer groundTrail;
 
         // -----------------------------------------------------------------
         // Runtime state
@@ -107,7 +133,7 @@ namespace ParodyStudios.Cricket
         public bool IsIdle => _phase == Phase.Idle || _phase == Phase.Done;
 
         /// <summary>Current phase of the ball, useful for UI state.</summary>
-        public bool IsInAir   => _phase == Phase.Air;
+        public bool IsInAir => _phase == Phase.Air;
         public bool HasBounced => _phase == Phase.Ground || _phase == Phase.Done;
 
         /// <summary>
@@ -115,9 +141,9 @@ namespace ParodyStudios.Cricket
         /// </summary>
         public void Launch(Vector3 releasePos, Vector3 bouncePos, DeliveryType delivery)
         {
-            _delivery   = delivery;
-            _startPos   = releasePos;
-            _bouncePos  = bouncePos;
+            _delivery = delivery;
+            _startPos = releasePos;
+            _bouncePos = bouncePos;
             transform.position = releasePos;
 
             // Compute flight basis on the XZ plane.
@@ -125,16 +151,22 @@ namespace ParodyStudios.Cricket
             fwd.y = 0f;
             float dist = fwd.magnitude;
             _flightForward = dist > 0.0001f ? fwd / dist : Vector3.forward;
-            _flightRight   = Vector3.Cross(Vector3.up, _flightForward);
+            _flightRight = Vector3.Cross(Vector3.up, _flightForward);
 
             _flightDuration = Mathf.Max(0.05f, dist / Mathf.Max(0.1f, forwardSpeed));
-            _flightTimer    = 0f;
-            _prevPos        = releasePos;
+            _flightTimer = 0f;
+            _prevPos = releasePos;
 
-            if (trail != null)
+            // Trails: clear both, enable air trail only. Ground trail will be enabled at bounce.
+            if (airTrail != null)
             {
-                trail.Clear();
-                trail.emitting = true;
+                airTrail.Clear();
+                airTrail.emitting = true;
+            }
+            if (groundTrail != null)
+            {
+                groundTrail.Clear();
+                groundTrail.emitting = false;
             }
 
             _phase = Phase.Air;
@@ -143,15 +175,20 @@ namespace ParodyStudios.Cricket
         /// <summary>Reset the ball back to a neutral state (e.g., bowler hand) ready for next delivery.</summary>
         public void ResetBall(Vector3 position)
         {
-            transform.position    = position;
-            _phase                = Phase.Idle;
-            _postBounceVelocity   = Vector3.zero;
-            _postBounceTimer      = 0f;
+            transform.position = position;
+            _phase = Phase.Idle;
+            _postBounceVelocity = Vector3.zero;
+            _postBounceTimer = 0f;
 
-            if (trail != null)
+            if (airTrail != null)
             {
-                trail.emitting = false;
-                trail.Clear();
+                airTrail.emitting = false;
+                airTrail.Clear();
+            }
+            if (groundTrail != null)
+            {
+                groundTrail.emitting = false;
+                groundTrail.Clear();
             }
         }
 
@@ -162,7 +199,7 @@ namespace ParodyStudios.Cricket
         {
             switch (_phase)
             {
-                case Phase.Air:    UpdateAirPhase();    break;
+                case Phase.Air: UpdateAirPhase(); break;
                 case Phase.Ground: UpdateGroundPhase(); break;
             }
         }
@@ -175,7 +212,7 @@ namespace ParodyStudios.Cricket
 
             // 1. Linear interpolation in XZ from release to bounce target.
             Vector3 ground = Vector3.Lerp(
-                new Vector3(_startPos.x,  0f, _startPos.z),
+                new Vector3(_startPos.x, 0f, _startPos.z),
                 new Vector3(_bouncePos.x, 0f, _bouncePos.z),
                 t);
 
@@ -203,52 +240,85 @@ namespace ParodyStudios.Cricket
         /// <summary>Bounce moment: lock direction, optionally apply spin kick, switch to ground phase.</summary>
         private void HandleBounce()
         {
-            // Tangent velocity at the moment of impact.
-            // For swing: this naturally already contains the sideways drift built up during flight.
-            // For spin:  this is purely along _flightForward.
+            // Full impact velocity from the last simulated step. This INCLUDES the
+            // downward vertical component the ball has built up while descending the
+            // parabolic arc — we need that to compute a realistic upward rebound.
+            // For swing it also already contains the lateral drift built up in flight.
             float dt = Mathf.Max(Time.deltaTime, 1e-4f);
-            Vector3 tangentVel = (transform.position - _prevPos) / dt;
+            Vector3 vel = (transform.position - _prevPos) / dt;
 
-            // Snap to the bounce surface height.
+            // Snap exactly to the bounce surface height so the rebound starts on the pitch.
             Vector3 pos = transform.position;
             pos.y = _bouncePos.y;
             transform.position = pos;
 
-            // Discard vertical component — post-bounce travel is along the pitch.
-            tangentVel.y = 0f;
+            // VERTICAL: invert and scale by restitution. Down → Up, with energy loss.
+            // This is what makes the ball "bounce above height" after contact.
+            vel.y = -vel.y * bounceRestitution;
 
-            // PHASE I — Swing: NOTHING is applied here. The lateral force stops instantly.
-            //                  The ball simply continues along its current tangent (a straight
-            //                  line that extends naturally from the curve).
+            // PHASE I — Swing: NO new horizontal force is applied. The lateral drift from
+            //                  the swing curve naturally lives in vel.x/vel.z, so the ball
+            //                  flies along the curve's tangent — a straight line in top-down.
             //
-            // PHASE II — Spin: a single, instant lateral kick is applied. This is the "kink"
-            //                  that separates the straight-before from straight-after segments.
+            // PHASE II — Spin: a single instant lateral kick is added in the horizontal plane.
+            //                  This is the visible "kink" at bounce.
             if (_delivery == DeliveryType.Spin)
             {
                 Vector3 kick = _flightRight * (spinStrength * maxSpinDeflectionSpeed * (int)spinDirection);
-                tangentVel += kick;
+                vel += kick;
             }
 
-            _postBounceVelocity = tangentVel;
-            _postBounceTimer    = 0f;
-            _phase              = Phase.Ground;
+            _postBounceVelocity = vel;
+            _postBounceTimer = 0f;
+            _phase = Phase.Ground;
+
+            // Trail handover: freeze the air trail in place (existing segments keep fading
+            // out per their TrailRenderer.time setting) and start the ground trail fresh
+            // from the bounce point. This gives a clean visual split between the curved
+            // air phase and the straight post-bounce phase.
+            if (airTrail != null) airTrail.emitting = false;
+            if (groundTrail != null)
+            {
+                groundTrail.Clear();
+                groundTrail.emitting = true;
+            }
         }
 
-        /// <summary>Ground phase: pure straight-line motion with mild damping.</summary>
+        /// <summary>Ground phase: parabolic arc under gravity, with optional secondary bounces.
+        /// Horizontal direction stays constant — no swing or spin force is applied here.</summary>
         private void UpdateGroundPhase()
         {
-            _postBounceTimer += Time.deltaTime;
+            float dt = Time.deltaTime;
+            _postBounceTimer += dt;
 
-            // Exponential damping so the ball gradually slows. No lateral forces are applied,
-            // so the direction never changes after the bounce — exactly as the spec requires.
-            float damp = Mathf.Exp(-postBounceDamping * Time.deltaTime);
-            _postBounceVelocity *= damp;
+            // 1. Apply gravity to the vertical component so the ball arcs naturally.
+            _postBounceVelocity.y += gravity * dt;
 
-            transform.position += _postBounceVelocity * Time.deltaTime;
+            // 2. Damp the HORIZONTAL component only. Direction is preserved (no rotation
+            //    of the velocity vector), so the path stays straight in top-down view.
+            float damp = Mathf.Exp(-postBounceDamping * dt);
+            _postBounceVelocity.x *= damp;
+            _postBounceVelocity.z *= damp;
+
+            // 3. Integrate position.
+            Vector3 next = transform.position + _postBounceVelocity * dt;
+
+            // 4. Secondary bounces: if the ball drops back to pitch level, reflect & damp.
+            //    This makes successive bounces look natural rather than the ball clipping
+            //    through the ground. Below a small threshold we just let it roll.
+            if (next.y <= _bouncePos.y && _postBounceVelocity.y < 0f)
+            {
+                next.y = _bouncePos.y;
+                _postBounceVelocity.y = -_postBounceVelocity.y * bounceRestitution;
+                if (_postBounceVelocity.y < minBounceVelocity)
+                    _postBounceVelocity.y = 0f;
+            }
+
+            transform.position = next;
 
             if (_postBounceTimer >= postBounceLifetime)
             {
-                if (trail != null) trail.emitting = false;
+                if (groundTrail != null) groundTrail.emitting = false;
                 _phase = Phase.Done;
             }
         }
