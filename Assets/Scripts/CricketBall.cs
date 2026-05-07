@@ -167,11 +167,15 @@ namespace ParodyStudios.Cricket
             // at release (the ball begins at the true release position in world space).
             if (delivery == DeliveryType.Swing)
             {
+                // The swing curve adds a lateral offset at t=1 equal to:
+                //   swingProgressCurve.Evaluate(1) * swingStrength * maxSwingOffset * direction
+                // Shift only _bouncePos (the lerp endpoint) opposite to that offset so
+                // the ball's visible arc swings at full strength and lands on the marker.
+                // _startPos is NOT shifted — it must stay at the true release position
+                // or the ball will teleport on the first frame.
                 float curveAtEnd = swingProgressCurve.Evaluate(1f);
                 float lateralAtEnd = curveAtEnd * swingStrength * maxSwingOffset * (int)swingDirection;
-                Vector3 compensation = _flightRight * lateralAtEnd;
-                _startPos -= compensation;
-                _bouncePos -= compensation;
+                _bouncePos -= _flightRight * lateralAtEnd;
                 _bouncePos.y = bouncePos.y; // Y is unaffected by horizontal shift
             }
 
