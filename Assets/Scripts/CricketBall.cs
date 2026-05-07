@@ -143,7 +143,6 @@ namespace ParodyStudios.Cricket
         {
             _delivery = delivery;
             _startPos = releasePos;
-            _bouncePos = bouncePos;
             transform.position = releasePos;
 
             // Compute flight basis on the XZ plane.
@@ -152,6 +151,29 @@ namespace ParodyStudios.Cricket
             float dist = fwd.magnitude;
             _flightForward = dist > 0.0001f ? fwd / dist : Vector3.forward;
             _flightRight = Vector3.Cross(Vector3.up, _flightForward);
+
+            _bouncePos = bouncePos;
+
+            // For swing deliveries the swing curve adds a lateral offset on top of the
+            // lerp baseline throughout the flight. At t=1 that offset equals:
+            //   swingProgressCurve.Evaluate(1) * swingStrength * maxSwingOffset * direction
+            //
+            // To guarantee the ball lands exactly on the marker at any strength we
+            // shift the LERP BASELINE (both start and end) by the negative of that
+            // offset. The swing then swings the ball out and brings it back to the
+            // marker at t=1 — full swing arc and full strength are preserved.
+            //
+            // swingProgressCurve.Evaluate(0) = 0, so the start-point shift is invisible
+            // at release (the ball begins at the true release position in world space).
+            if (delivery == DeliveryType.Swing)
+            {
+                float curveAtEnd = swingProgressCurve.Evaluate(1f);
+                float lateralAtEnd = curveAtEnd * swingStrength * maxSwingOffset * (int)swingDirection;
+                Vector3 compensation = _flightRight * lateralAtEnd;
+                _startPos -= compensation;
+                _bouncePos -= compensation;
+                _bouncePos.y = bouncePos.y; // Y is unaffected by horizontal shift
+            }
 
             _flightDuration = Mathf.Max(0.05f, dist / Mathf.Max(0.1f, forwardSpeed));
             _flightTimer = 0f;

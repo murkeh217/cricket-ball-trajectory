@@ -3394,8 +3394,8 @@ MonoBehaviour:
   forwardSpeed: 200
   arcHeight: 4
   swingDirection: 1
-  swingStrength: 0.5
-  maxSwingOffset: 2
+  swingStrength: 1
+  maxSwingOffset: 5
   swingProgressCurve:
     serializedVersion: 2
     m_Curve:
@@ -3421,7 +3421,7 @@ MonoBehaviour:
     m_PostInfinity: 2
     m_RotationOrder: 4
   spinDirection: 1
-  spinStrength: 0.5
+  spinStrength: 1
   maxSpinDeflectionSpeed: 5
   bounceRestitution: 0.671
   gravity: -9.81
